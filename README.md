@@ -1,58 +1,57 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Illuminate — Bi-Tech Challenge Solution
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Laravel 13 application implementing every scripted step of the challenge as artisan commands.
 
-## About Laravel
-
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
-
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
-
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
-
-## Learning Laravel
-
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
-
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
-
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
-
-## Agentic Development
-
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
+## Setup
 
 ```bash
-composer require laravel/boost --dev
-
-php artisan boost:install
+composer install
+cp .env.example .env && php artisan key:generate
+# set ILLUMINATE_TOKEN in .env
+php artisan migrate
+php artisan test
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+## Commands
 
-## Contributing
+| Stage | Command | Purpose |
+|---|---|---|
+| 2 | `illuminate:fetch-credentials` | Fetch the SSH key and database credentials |
+| 2 | `illuminate:db:query "<sql>"` | Run read-only SQL on the remote PostgreSQL through an SSH tunnel |
+| 2 | `illuminate:db:find-flag` | Scan every readable relation for `ILLUMINATE{...}` |
+| 3 | `illuminate:import` | Mirror neighborhoods and incidents into local SQLite |
+| 3 | `illuminate:donut-flag {neighborhood=NB-7A2F} [-v]` | Concatenate incident codes in the 0.5–2 km donut, nearest first |
+| — | `illuminate:submit-repo <repo_url> <cv>` | Submit this repository and a PDF CV |
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+## Stage 2 — Beyond the tunnel
 
-## Code of Conduct
+PostgreSQL only listens on the SSH host's `localhost:5432`, so `SshTunnel` runs
+`ssh -N -L 127.0.0.1:<free port>:localhost:5432` and `ChallengeDatabase` registers a runtime
+`pgsql` connection on that port for the duration of a callback.
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+- The private key is written to the private disk with `0600` (OpenSSH rejects looser permissions) and kept apart from the other credentials; both are git-ignored.
+- `BatchMode`, `ExitOnForwardFailure` and `IdentitiesOnly` make failures fast and explicit; host keys go to a project-local `known_hosts`.
+- The tunnel waits until the local port accepts connections, surfaces ssh's stderr if it dies, and is always closed in `finally`.
+- Every remote query runs inside `SET TRANSACTION READ ONLY`.
 
-## Security Vulnerabilities
+## Stage 3 — Centroid of chaos
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+### `WithinDonut` relation
 
-## License
+`Neighborhood::incidents()` returns `new WithinDonut($this, Incident::class, innerRadiusKm: 0.5, outerRadiusKm: 2.0)`,
+a direct subclass of `Illuminate\Database\Eloquent\Relations\Relation`:
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+- **Lazy loading** — index-friendly bounding-box pre-filter, exact donut test, ordered by distance then key.
+- **Eager loading** — one query for the union of every parent's bounding box; `match()` applies the same donut test and ordering per parent in PHP.
+- **Existence queries** — `has`, `whereHas` and `withCount` use a correlated subquery reading the centroid from the parent row.
+- Comparisons use squared distances, so the base query needs no `sqrt`.
+- Numeric constants are inlined as literals: PDO binds floats as strings and SQLite compares an untyped expression against text as `number < text`, which silently matched nothing.
+
+### Data decisions
+
+The dataset contains 38 sequenced `alpha-N` incidents (the flag) and 200 `noise-N` decoys, several placed to punish subtle mistakes:
+
+- **Coordinate order** — PostgreSQL `point` is `(x, y)`, but the data stores `(latitude, longitude)` (33.3, 44.4 is Baghdad). Swapping them scales longitude by `cos(44°)` instead of `cos(33°)`.
+- **Centroid** — the polygon is a trapezoid, so the candidate definitions disagree. The vertex average (PostgreSQL `@@`) and the area-weighted centroid both drop flag characters and include 12–17 decoys; the bounding-box center isolates exactly the 38 sequenced incidents. Three decoys sit precisely on that center.
+- **Distance model** — equirectangular, 111 km per degree, longitude scaled by `cos(centroid latitude)`. Under it the flag incidents sit at exact fractions (`7/13 + n/26` km), and the decoy `noise-74` lies exactly on the 0.5 km inner edge (squared distance `0.2499999999537`). Haversine puts that decoy 0.9 m inside the donut and corrupts the flag.
+- **Timestamps** — `occurred_at` is converted to UTC in PostgreSQL before import, since Laravel stores datetimes without an offset.
