@@ -35,4 +35,10 @@ return [
         ],
     ],
 
+    'illuminate' => [
+        'url' => env('ILLUMINATE_API_URL', 'https://illuminate.bitech.com.sa/api'),
+        'token' => env('ILLUMINATE_TOKEN'),
+        'timeout' => (int) env('ILLUMINATE_API_TIMEOUT', 15),
+    ],
+
 ];
