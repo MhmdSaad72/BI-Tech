@@ -28,6 +28,28 @@ class IlluminateClient
             ->json();
     }
 
+    /**
+     * Submit the solution repository together with the candidate's CV.
+     *
+     * @return array<string, mixed>
+     */
+    public function submitRepository(string $repositoryUrl, string $cvPath): array
+    {
+        $cv = fopen($cvPath, 'r');
+
+        try {
+            return $this->request()
+                ->attach('cv', $cv, basename($cvPath), ['Content-Type' => 'application/pdf'])
+                ->post('challenge/submit-repo', ['repo_url' => $repositoryUrl])
+                ->throw()
+                ->json() ?? [];
+        } finally {
+            if (is_resource($cv)) {
+                fclose($cv);
+            }
+        }
+    }
+
     private function request(): PendingRequest
     {
         if (blank($this->token)) {
